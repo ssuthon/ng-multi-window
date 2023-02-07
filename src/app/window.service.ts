@@ -1,27 +1,32 @@
-import { Injectable, Type } from '@angular/core';
+import { Inject, Injectable, Type } from '@angular/core';
 import { DialogService, DynamicDialogRef } from 'primeng/dynamicdialog';
-import { BehaviorSubject, Observable } from 'rxjs';
-
+import { BehaviorSubject, Observable, Subject } from 'rxjs';
+import { WINDOW_REGISTRY } from './app.module';
+import sortBy from 'lodash/sortBy'
 
 export class WindowInfo {
   dialogComponent: HTMLElement | null = null
   onTop = false
+  cachedZIndex = -1
+
   constructor(
     public title: string,
     public wid: number,
     public ref: DynamicDialogRef,
+    public componentName: string,
     public config: Partial<WindowConfig>
   ){}
 
   get zIndex(): number{
     if(this.dialogComponent){
-      return parseInt(this.dialogComponent.style.zIndex)
+      this.cachedZIndex = parseInt(this.dialogComponent.style.zIndex)
     }
-    return 0
+    return this.cachedZIndex
   }
 
   set zIndex(idx: number){
     if(this.dialogComponent){
+      this.cachedZIndex = idx
       this.dialogComponent.style.zIndex = String(idx)
     }
   }
@@ -34,26 +39,45 @@ export type WindowConfig = {
   data: any
 }
 
+export type WindowEvent = {
+  name: string
+  data: any
+}
+
+type SavedData = {
+  when: Date
+  windows: {
+    componentName: string
+    config: Partial<WindowConfig>
+  }[]  
+}
+
+const SAVED_DATA_KEY = 'app.savedData'
+
 @Injectable({
   providedIn: 'root'
 })
 export class WindowService {
-  windowInfoListSubject = new BehaviorSubject<WindowInfo[]>([])
+  private windowInfoListSubject = new BehaviorSubject<WindowInfo[]>([])
   windowInfoList$: Observable<WindowInfo[]>
+  private windowEventSubject = new Subject<WindowEvent>()
+  windowEvent$: Observable<WindowEvent>
   private wseq = 1
   private windowInfos: {[key: number]: WindowInfo} = {}
   private baseZIndex = 10000
 
   constructor(
     private dialogService: DialogService,
-  ) { 
-    this.windowInfoList$ = this.windowInfoListSubject.asObservable()
+    @Inject(WINDOW_REGISTRY) private windowRegistry: {[key: string]: Type<any>}
+  ) {     
+    this.windowInfoList$ = this.windowInfoListSubject.asObservable()    
+    this.windowEvent$ = this.windowEventSubject.asObservable()
   }
 
-  open(componentType: Type<any>, config: Partial<WindowConfig>){
+  open(componentName: string, config: Partial<WindowConfig>){
     const wid = this.wseq++
     const title = config.title || `Id: ${wid}`
-    const ref = this.dialogService.open(componentType, {
+    const ref = this.dialogService.open(this.windowRegistry[componentName], {
       header: title,
       data: config.data,
       width: config.width || '70%',
@@ -67,7 +91,7 @@ export class WindowService {
     ref.onClose.subscribe(()=> {
       this.removeWindow(wid)
     })
-    this.windowInfos[wid] = new WindowInfo(title, wid, ref, config)
+    this.windowInfos[wid] = new WindowInfo(title, wid, ref, componentName, config)
     setTimeout(() => this.initWindow(wid), 100)
   }
 
@@ -87,8 +111,17 @@ export class WindowService {
     this.notifyWindowChanged()
   }
 
+  emitEvent(event: WindowEvent){
+    this.windowEventSubject.next(event)
+  }
+
+  clearSavedWindows(){    //should be called when user logout
+    sessionStorage.removeItem(SAVED_DATA_KEY)
+  }
+
   private notifyWindowChanged(){
     this.windowInfoListSubject.next(Object.values(this.windowInfos))
+    this.saveWindows()
   }
 
   private initWindow(wid: number){
@@ -101,8 +134,29 @@ export class WindowService {
     this.notifyWindowChanged() 
   }
 
-  private removeWindow(wid: number){
+  private removeWindow(wid: number, notify = true){
     delete this.windowInfos[wid]
-    this.notifyWindowChanged()
+    if(notify){
+      this.notifyWindowChanged()
+    }
+  }
+
+  private saveWindows(){
+    const data: SavedData = {when: new Date(), windows: []}
+    data.windows = sortBy(Object.values(this.windowInfos), 'cachedZIndex').map(info => {
+      return {
+        componentName: info.componentName,
+        config: info.config,
+      }
+    })
+    sessionStorage.setItem(SAVED_DATA_KEY, JSON.stringify(data))
+  }
+
+  loadSavedWindows() : any{
+    const rawData = sessionStorage.getItem(SAVED_DATA_KEY)
+    if(rawData){
+      const data: SavedData = JSON.parse(rawData)
+      data.windows.forEach(wd => this.open(wd.componentName, wd.config))
+    }
   }
 }

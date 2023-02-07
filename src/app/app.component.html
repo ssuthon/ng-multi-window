@@ -1,7 +1,7 @@
-<!-- <p-megaMenu [model]="items" [baseZIndex]="10000"></p-megaMenu> -->
 <div>
 <p-dropdown [options]="windowInfoList" optionLabel="title" [(ngModel)]="selectedWindow" (onChange)="windowChanged()"></p-dropdown>
 </div>
 <div class="working-area">
+  <input type="text" pInputText [(ngModel)]="msg"/>
   <button (click)="doIt()">Click</button>
 </div>
